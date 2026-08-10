@@ -6,39 +6,101 @@ Reverse-engineering project for the GTA SA-MP `.ter` BitStream recording format.
 
 Recover the `.ter` container exactly, then decode each stored RakNet/SA-MP BitStream payload into packet/RPC fields.
 
-## Confirmed container layout
+## Confirmed `.ter` container
 
-The recorder source supplied for this project writes the following fields in order:
+The recorder is a 32-bit Windows program, so the serialized `size_t` fields are 4 bytes. The record layout is:
 
 ```text
-uint32  nameLen          // size_t on the 32-bit recorder
+uint32  nameLen
 byte[]  name
-uint32  dateLen          // size_t on the 32-bit recorder
+uint32  dateLen
 byte[]  date
-uint64  totalDuration    // type still tied to the recorder's declaration
-uint32  recordCount      // size_t on the 32-bit recorder
+uint64  totalDuration
+uint32  recordCount
 
 repeat recordCount:
-    uint64  timestamp    // based on current sample analysis
-    bool    isRPC        // expected 1 byte on MSVC; must be validated
-    byte    rpcId        // current working hypothesis; must be validated against EOF
+    uint64  timestamp
+    uint8   isRPC
+    int32   id
     int32   reliability
-    uint32  dataSize     // size_t on the 32-bit recorder
+    uint32  dataSize
     byte[]  data
 ```
 
-The sample `PASARMODERN_AYAM.ter` confirms the beginning of the container:
+The sample `PASARMODERN_AYAM.ter` is 2410 bytes and contains 38 records. Parsing with the above layout terminates exactly at EOF.
 
-- name: `PASARMODERN_AYAM`
-- date: `2026-08-06 14:18:49`
-- totalDuration: `7157`
-- recordCount: `38`
+## BitStream recording semantics
 
-## Important distinction
+The supplied recorder resets the captured BitStream read pointer before recording it, then copies the complete used bit range. The writer stores:
 
-The `.ter` file is a recording container. Its `data` fields are the bytes captured from a RakNet `BitStream`; they are not a separate encrypted `.ter` encoding. The supplied recorder reconstructs a `BitStream` with `WriteBits(data, dataSize * 8, false)` when loading.
+```text
+dataSize = (numberOfBitsUsed + 7) >> 3
+```
 
-The next validation step is to prove the record layout through the entire file and confirm that the final record ends exactly at EOF.
+and copies the BitStream data without an additional right-alignment operation. The loader reconstructs the payload with `WriteBits(data, dataSize * 8, false)`.
+
+For packet records, the packet ID is present in the captured BitStream. For RPC records, the RPC ID is stored in the record metadata and is not prefixed to the RPC payload.
+
+## Confirmed Packet 207 / ID_PLAYER_SYNC
+
+`PASARMODERN_AYAM.ter` contains 12 records with packet ID 207 and `dataSize == 69` (552 bits). The payload schema matches SA-MP's incoming `ID_PLAYER_SYNC` layout exactly:
+
+```text
+uint8   packetId
+uint16  lrKey
+uint16  udKey
+uint16  keys
+float3  position
+float4  quaternion (w, x, y, z)
+uint8   health
+uint8   armour
+2 bits  additionalKey
+6 bits  weaponId
+uint8   specialAction
+float3  velocity
+float3  surfingOffsets
+uint16  surfingVehicleId
+int16   animationId
+int16   animationFlags
+```
+
+The total is exactly 552 bits / 69 bytes. There is no player ID field in this packet; the player identity is supplied by the surrounding RakNet/server context.
+
+For the sample 207 records, the decoded common state is:
+
+```text
+position         = (1868.021606, 2106.042725, 11.088171)
+quaternion       = (0.975472, -0.0, 0.0, -0.220125)
+health           = 99
+armour           = 0
+additionalKey    = 0
+weaponId         = 0
+specialAction    = 0
+velocity         = (0, 0, 0)
+surfingOffsets   = (0, 0, 0)
+surfingVehicleId = 0
+animationId      = 1189
+animationFlags   = -32764
+```
+
+One 207 record has the packed additional-key/weapon byte equal to `0x40`, demonstrating that the byte is not simply padding; the lower 2 bits represent the 2-bit additional-key field and the upper 6 bits represent the weapon field under the SA-MP schema.
+
+The standard schema is independently documented by Pawn.RakNet's `OnFootSync` reference and the SA-MP packet list. The 69-byte length also matches the exact BitStream size observed in the `.ter` sample.
+
+## Current reverse-engineering status
+
+```text
+TER container                    CONFIRMED
+Writer/loader relationship       CONFIRMED
+BitStream copy semantics         CONFIRMED
+Packet metadata                  CONFIRMED
+RPC metadata                     CONFIRMED
+ID_PLAYER_SYNC (207)             CONFIRMED
+207 exact 552-bit consumption    CONFIRMED
+203 / AIM_SYNC                   NEXT
+205                             NEXT
+RPC 62                          NEXT
+```
 
 ## Build
 
