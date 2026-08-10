@@ -37,10 +37,19 @@ public:
     }
 
     std::uint64_t offset() {
-        return static_cast<std::uint64_t>(file_.tellg());
+        const auto pos = file_.tellg();
+        if (pos < 0) throw std::runtime_error("tellg failed");
+        return static_cast<std::uint64_t>(pos);
     }
 
-    bool eof() const { return file_.eof(); }
+    std::uint64_t size() {
+        const auto current = file_.tellg();
+        file_.seekg(0, std::ios::end);
+        const auto end = file_.tellg();
+        file_.seekg(current);
+        if (end < 0 || current < 0) throw std::runtime_error("failed to determine file size");
+        return static_cast<std::uint64_t>(end);
+    }
 
 private:
     std::ifstream file_;
@@ -65,8 +74,9 @@ int main(int argc, char** argv) {
 
     try {
         Reader r(argv[1]);
+        const auto file_size = r.size();
 
-        // The recorder was built as a 32-bit Windows application: size_t is 4 bytes.
+        // The recorder is a 32-bit Windows binary, so its serialized size_t fields are 4 bytes.
         const auto name_len = r.read<std::uint32_t>();
         const auto name = r.read_string(name_len);
         const auto date_len = r.read<std::uint32_t>();
@@ -78,6 +88,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("sanity check failed");
 
         std::cout << "FILE: " << argv[1] << '\n';
+        std::cout << "fileSize: " << file_size << '\n';
         std::cout << "name: " << name << '\n';
         std::cout << "date: " << date << '\n';
         std::cout << "totalDuration: " << duration << '\n';
@@ -88,7 +99,9 @@ int main(int argc, char** argv) {
             const auto start = r.offset();
             const auto timestamp = r.read<std::uint64_t>();
             const auto is_rpc = r.read<std::uint8_t>();
-            const auto rpc_id = r.read<std::uint8_t>();
+
+            // Confirmed from the original writer: rpcId is serialized with sizeof(int) = 4 bytes.
+            const auto rpc_id = r.read<std::int32_t>();
             const auto reliability = r.read<std::int32_t>();
             const auto data_size = r.read<std::uint32_t>();
 
@@ -101,13 +114,20 @@ int main(int argc, char** argv) {
             std::cout << "  offset:       0x" << std::hex << start << std::dec << '\n';
             std::cout << "  timestamp:    " << timestamp << '\n';
             std::cout << "  isRPC:        " << static_cast<unsigned>(is_rpc) << '\n';
-            std::cout << "  rpcId:        " << static_cast<unsigned>(rpc_id) << '\n';
+            std::cout << "  id:           " << rpc_id << '\n';
             std::cout << "  reliability:  " << reliability << '\n';
             std::cout << "  dataSize:     " << data_size << '\n';
             std::cout << "  data:         ";
             hex_dump(data);
             std::cout << "  nextOffset:   0x" << std::hex << r.offset() << std::dec << "\n\n";
         }
+
+        const auto final_offset = r.offset();
+        std::cout << "finalOffset: 0x" << std::hex << final_offset << std::dec << '\n';
+        std::cout << "eofExact: " << (final_offset == file_size ? "YES" : "NO") << '\n';
+
+        if (final_offset != file_size)
+            throw std::runtime_error("parsed records do not terminate exactly at EOF");
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n';
         return 1;
