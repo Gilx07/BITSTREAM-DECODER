@@ -41,6 +41,18 @@ and copies the BitStream data without an additional right-alignment operation. T
 
 For packet records, the packet ID is present in the captured BitStream. For RPC records, the RPC ID is stored in the record metadata and is not prefixed to the RPC payload.
 
+## RakNet BitStream reader
+
+`src/bitstream_reader.hpp` now implements the relevant RakNet bit semantics needed by the recorder payloads:
+
+- first logical bit is the MSB of the backing byte;
+- `ReadBits(..., true)` right-aligns partial final bytes;
+- native multi-byte values are interpreted in the original little-endian Windows environment;
+- arbitrary bit positions can be read without requiring byte alignment;
+- bounds checks reject reads beyond the recorded bit range.
+
+This is intentionally a small reader rather than a reimplementation of the entire RakNet `BitStream` class. Additional RakNet operations such as compressed integers, normalized vectors/quaternions, and variable-length encodings will be added only when a confirmed SA-MP packet/RPC requires them.
+
 ## Confirmed Packet 207 / ID_PLAYER_SYNC
 
 `PASARMODERN_AYAM.ter` contains 12 records with packet ID 207 and `dataSize == 69` (552 bits). The payload schema matches SA-MP's incoming `ID_PLAYER_SYNC` layout exactly:
@@ -66,7 +78,9 @@ int16   animationFlags
 
 The total is exactly 552 bits / 69 bytes. There is no player ID field in this packet; the player identity is supplied by the surrounding RakNet/server context.
 
-For the sample 207 records, the decoded common state is:
+`src/packet_decoder.hpp` now contains a dedicated 552-bit decoder for ID 207. `ter_parser.exe` automatically applies it to records where `isRPC == 0`, `id == 207`, and `dataSize == 69`, while retaining the raw hex dump.
+
+For the sample 207 records, the previously confirmed common state is:
 
 ```text
 position         = (1868.021606, 2106.042725, 11.088171)
@@ -93,10 +107,11 @@ The standard schema is independently documented by Pawn.RakNet's `OnFootSync` re
 TER container                    CONFIRMED
 Writer/loader relationship       CONFIRMED
 BitStream copy semantics         CONFIRMED
+RakNet bit reader                IMPLEMENTED
 Packet metadata                  CONFIRMED
 RPC metadata                     CONFIRMED
-ID_PLAYER_SYNC (207)             CONFIRMED
-207 exact 552-bit consumption    CONFIRMED
+ID_PLAYER_SYNC (207)             CONFIRMED + DECODER
+207 exact 552-bit consumption    CONFIRMED + DECODER
 203 / AIM_SYNC                   NEXT
 205                             NEXT
 RPC 62                          NEXT
