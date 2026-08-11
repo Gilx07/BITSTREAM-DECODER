@@ -10,8 +10,10 @@
 namespace bitstream_decoder {
 
 // Reader for the bit ordering used by RakNet::BitStream.
-// RakNet stores the first logical bit at the most-significant bit of each
-// backing byte. Multi-bit integer reads are right-aligned into the result.
+// The first logical bit is stored at bit 7 (MSB) of the backing byte.
+// RakNet ReadBits(..., true) right-aligns a final partial byte, while
+// multi-byte native values are kept in the platform's native byte order.
+// This project targets the original 32-bit Windows/SA-MP environment.
 class BitStreamReader {
 public:
     BitStreamReader(const std::uint8_t* data, std::size_t size_bytes, std::size_t bit_count)
@@ -40,20 +42,42 @@ public:
         bit_offset_ += bits;
     }
 
+    // Equivalent to RakNet ReadBits(..., true) for a native little-endian
+    // Windows target. For N bits, the logical bits are first materialized
+    // into bytes exactly as ReadBits does; a partial final byte is right
+    // aligned, then the byte sequence is interpreted as a little-endian
+    // integer.
     std::uint64_t read_bits(std::size_t bits) {
         if (bits > 64)
             throw std::invalid_argument("BitStreamReader: cannot read more than 64 bits");
         require(bits);
+        if (bits == 0)
+            return 0;
 
-        std::uint64_t value = 0;
+        std::uint8_t out[8]{};
+        const std::size_t out_bytes = (bits + 7u) / 8u;
+
         for (std::size_t i = 0; i < bits; ++i) {
             const std::size_t absolute_bit = bit_offset_ + i;
-            const std::size_t byte_index = absolute_bit >> 3u;
-            const unsigned bit_in_byte = static_cast<unsigned>(absolute_bit & 7u);
-            const std::uint8_t byte = data_[byte_index];
-            const std::uint8_t bit = static_cast<std::uint8_t>((byte >> (7u - bit_in_byte)) & 1u);
-            value = (value << 1u) | bit;
+            const std::size_t source_byte = absolute_bit >> 3u;
+            const unsigned source_bit = static_cast<unsigned>(absolute_bit & 7u);
+            const std::uint8_t bit = static_cast<std::uint8_t>(
+                (data_[source_byte] >> (7u - source_bit)) & 1u);
+
+            const std::size_t destination_byte = i >> 3u;
+            const unsigned destination_bit = static_cast<unsigned>(i & 7u);
+            out[destination_byte] |= static_cast<std::uint8_t>(
+                bit << (7u - destination_bit));
         }
+
+        // RakNet ReadBits(..., true) right-aligns a partial final byte.
+        const unsigned remainder = static_cast<unsigned>(bits & 7u);
+        if (remainder != 0)
+            out[out_bytes - 1] >>= (8u - remainder);
+
+        std::uint64_t value = 0;
+        for (std::size_t i = 0; i < out_bytes; ++i)
+            value |= static_cast<std::uint64_t>(out[i]) << (i * 8u);
 
         bit_offset_ += bits;
         return value;
