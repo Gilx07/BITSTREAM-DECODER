@@ -1,3 +1,5 @@
+#include "packet_decoder.hpp"
+
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -64,6 +66,28 @@ void hex_dump(const std::vector<std::uint8_t>& data) {
     std::cout << std::dec << '\n';
 }
 
+void print_player_sync_207(const bitstream_decoder::PlayerSync207& p) {
+    std::cout << "  decoded:      ID_PLAYER_SYNC (207)\n";
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "    lrKey:      " << p.lr_key << '\n';
+    std::cout << "    udKey:      " << p.ud_key << '\n';
+    std::cout << "    keys:       " << p.keys << '\n';
+    std::cout << "    position:   (" << p.position.x << ", " << p.position.y << ", " << p.position.z << ")\n";
+    std::cout << "    quaternion: (" << p.quaternion.w << ", " << p.quaternion.x << ", "
+              << p.quaternion.y << ", " << p.quaternion.z << ")\n";
+    std::cout << "    health:     " << static_cast<unsigned>(p.health) << '\n';
+    std::cout << "    armour:     " << static_cast<unsigned>(p.armour) << '\n';
+    std::cout << "    additional: " << static_cast<unsigned>(p.additional_key) << '\n';
+    std::cout << "    weaponId:   " << static_cast<unsigned>(p.weapon_id) << '\n';
+    std::cout << "    special:    " << static_cast<unsigned>(p.special_action) << '\n';
+    std::cout << "    velocity:   (" << p.velocity.x << ", " << p.velocity.y << ", " << p.velocity.z << ")\n";
+    std::cout << "    surfOffset: (" << p.surfing_offsets.x << ", " << p.surfing_offsets.y << ", " << p.surfing_offsets.z << ")\n";
+    std::cout << "    surfVehId:  " << p.surfing_vehicle_id << '\n';
+    std::cout << "    animId:     " << p.animation_id << '\n';
+    std::cout << "    animFlags:  " << p.animation_flags << '\n';
+    std::cout.unsetf(std::ios::floatfield);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -99,8 +123,6 @@ int main(int argc, char** argv) {
             const auto start = r.offset();
             const auto timestamp = r.read<std::uint64_t>();
             const auto is_rpc = r.read<std::uint8_t>();
-
-            // Confirmed from the original writer: rpcId is serialized with sizeof(int) = 4 bytes.
             const auto rpc_id = r.read<std::int32_t>();
             const auto reliability = r.read<std::int32_t>();
             const auto data_size = r.read<std::uint32_t>();
@@ -119,6 +141,19 @@ int main(int argc, char** argv) {
             std::cout << "  dataSize:     " << data_size << '\n';
             std::cout << "  data:         ";
             hex_dump(data);
+
+            // The confirmed recorder stores ceil(numberOfBitsUsed / 8) bytes.
+            // ID_PLAYER_SYNC (207) is confirmed to consume exactly 552 bits = 69 bytes.
+            if (is_rpc == 0 && rpc_id == 207 && data_size == 69) {
+                try {
+                    const auto decoded = bitstream_decoder::decode_player_sync_207(
+                        data.data(), data.size(), static_cast<std::size_t>(data_size) * 8u);
+                    print_player_sync_207(decoded);
+                } catch (const std::exception& e) {
+                    std::cout << "  decoded:      ERROR: " << e.what() << '\n';
+                }
+            }
+
             std::cout << "  nextOffset:   0x" << std::hex << r.offset() << std::dec << "\n\n";
         }
 
